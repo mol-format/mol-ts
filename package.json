@@ -17,6 +17,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "generate:test-fixtures": "npm run build && node scripts/generate-test-fixtures.js",
+    "perf": "npm run build && node scripts/run-performance-benchmark.js",
     "test": "npm run build && node scripts/run-fixture-tests.js",
     "prepublishOnly": "npm run build"
   },
