@@ -552,15 +552,23 @@ function parseEntryPayload(
     };
   }
 
-  if (!listItem && !looksLikeBareEntry(lines, index)) {
+  if (!listItem && !looksLikeBareEntry(payload, lines, index)) {
     return undefined;
   }
 
   return { key: payload.trim() };
 }
 
-function looksLikeBareEntry(lines: PreparedLine[], index: number): boolean {
+function looksLikeBareEntry(
+  payload: string,
+  lines: PreparedLine[],
+  index: number,
+): boolean {
   if (index < 0) {
+    return false;
+  }
+
+  if (/[.!?]$/.test(payload.trim())) {
     return false;
   }
 

@@ -9,12 +9,14 @@ const fixturesRoot = path.resolve(__dirname, "../tests/test-files");
 
 const molFiles = await collectMolFiles(fixturesRoot);
 let generated = 0;
+let skipped = 0;
 
 for (const molFile of molFiles) {
   const jsonFile = molFile.replace(/\.mol$/u, ".json");
 
   try {
     await fs.access(jsonFile);
+    skipped += 1;
     continue;
   } catch {
     // Missing expectation; generate below.
@@ -27,7 +29,8 @@ for (const molFile of molFiles) {
   console.log(`generated ${path.relative(fixturesRoot, jsonFile)}`);
 }
 
-console.log(`generated ${generated} fixture file(s)`);
+console.log(`generated ${generated} missing fixture file(s)`);
+console.log(`skipped ${skipped} existing fixture file(s)`);
 
 async function collectMolFiles(root) {
   const entries = await fs.readdir(root, { withFileTypes: true });
