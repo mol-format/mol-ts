@@ -7,6 +7,10 @@ import MOL from "../dist/index.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const fixturesRoot = path.resolve(__dirname, "../tests/test-files");
+const transforms = {
+  camelCase: MOL.camelCase,
+  identity: MOL.identity,
+};
 
 const molFiles = await collectMolFiles(fixturesRoot);
 const failures = [];
@@ -21,26 +25,32 @@ for (const molFile of molFiles) {
   }
 
   const source = await fs.readFile(molFile, "utf8");
-  const actual = MOL.parse(source, MOL.camelCase);
-  let matched = false;
+  const actualByMode = new Map();
+  let matchedFile;
 
-  for (const expectationFile of expectations) {
-    const expected = JSON.parse(await fs.readFile(expectationFile, "utf8"));
-    if (isDeepStrictEqual(actual, expected)) {
-      matched = true;
+  for (const expectation of expectations) {
+    if (!actualByMode.has(expectation.mode)) {
+      actualByMode.set(expectation.mode, MOL.parse(source, transforms[expectation.mode]));
+    }
+
+    const expected = JSON.parse(await fs.readFile(expectation.file, "utf8"));
+    if (isDeepStrictEqual(actualByMode.get(expectation.mode), expected)) {
+      matchedFile = expectation.file;
       break;
     }
   }
 
-  if (matched) {
+  if (matchedFile) {
     passed += 1;
     continue;
   }
 
   failures.push({
     file: path.relative(fixturesRoot, molFile),
-    actual,
-    expectations: expectations.map((file) => path.relative(fixturesRoot, file)),
+    actualByMode: Object.fromEntries(actualByMode),
+    expectations: expectations.map((expectation) =>
+      path.relative(fixturesRoot, expectation.file),
+    ),
   });
 }
 
@@ -54,7 +64,7 @@ if (missing.length > 0) {
 for (const failure of failures) {
   console.error(`fixture mismatch: ${failure.file}`);
   console.error(`  expected one of: ${failure.expectations.join(", ")}`);
-  console.error(`  actual: ${JSON.stringify(failure.actual)}`);
+  console.error(`  actual: ${JSON.stringify(failure.actualByMode)}`);
 }
 
 console.log(`passed ${passed} fixture test(s)`);
@@ -71,20 +81,42 @@ async function findExpectations(molFile) {
   const entries = await fs.readdir(directory);
 
   return entries
+    .map((entry) => parseExpectationEntry(entry))
     .filter((entry) => {
-      if (!entry.endsWith(".json")) {
+      if (!entry) {
         return false;
       }
 
-      const jsonStem = entry.replace(/\.json$/u, "");
       return (
-        jsonStem === stem ||
-        jsonStem === canonicalStem ||
-        jsonStem.startsWith(`${canonicalStem}.`)
+        entry.baseStem === stem ||
+        entry.baseStem === canonicalStem ||
+        entry.baseStem.startsWith(`${canonicalStem}.`)
       );
     })
     .sort()
-    .map((entry) => path.join(directory, entry));
+    .map((entry) => ({
+      file: path.join(directory, entry.fileName),
+      mode: entry.mode,
+    }));
+}
+
+function parseExpectationEntry(fileName) {
+  if (!fileName.endsWith(".json")) {
+    return undefined;
+  }
+
+  const jsonStem = fileName.replace(/\.json$/u, "");
+  const parts = jsonStem.split(".");
+  const mode = parts.at(-1);
+  if (!mode || !(mode in transforms)) {
+    return undefined;
+  }
+
+  return {
+    fileName,
+    mode,
+    baseStem: parts.slice(0, -1).join("."),
+  };
 }
 
 async function collectMolFiles(root) {

@@ -6,27 +6,33 @@ import MOL from "../dist/index.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const fixturesRoot = path.resolve(__dirname, "../tests/test-files");
+const transforms = {
+  camelCase: MOL.camelCase,
+  identity: MOL.identity,
+};
 
 const molFiles = await collectMolFiles(fixturesRoot);
 let generated = 0;
 let skipped = 0;
 
 for (const molFile of molFiles) {
-  const jsonFile = molFile.replace(/\.mol$/u, ".json");
-
-  try {
-    await fs.access(jsonFile);
-    skipped += 1;
-    continue;
-  } catch {
-    // Missing expectation; generate below.
-  }
-
   const source = await fs.readFile(molFile, "utf8");
-  const result = MOL.parse(source, MOL.camelCase);
-  await fs.writeFile(jsonFile, `${JSON.stringify(result, null, 2)}\n`, "utf8");
-  generated += 1;
-  console.log(`generated ${path.relative(fixturesRoot, jsonFile)}`);
+  for (const [mode, transform] of Object.entries(transforms)) {
+    const jsonFile = molFile.replace(/\.mol$/u, `.${mode}.json`);
+
+    try {
+      await fs.access(jsonFile);
+      skipped += 1;
+      continue;
+    } catch {
+      // Missing expectation; generate below.
+    }
+
+    const result = MOL.parse(source, transform);
+    await fs.writeFile(jsonFile, `${JSON.stringify(result, null, 2)}\n`, "utf8");
+    generated += 1;
+    console.log(`generated ${path.relative(fixturesRoot, jsonFile)}`);
+  }
 }
 
 console.log(`generated ${generated} missing fixture file(s)`);

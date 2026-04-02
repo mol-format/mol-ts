@@ -31,11 +31,17 @@ interface Frame {
   headingDepth?: number;
   mode: "pending" | "text" | "children";
   textBaseIndent?: number;
+  fence?: FenceInfo;
 }
 
 interface ParsedEntryLine {
   key: string;
   value?: string;
+}
+
+interface FenceInfo {
+  markerChar: "`" | "~";
+  markerLength: number;
 }
 
 const DEFAULT_VALUE_KEY = "$value";
@@ -82,6 +88,16 @@ export function parseDocument(source: string): MolDocument {
 
       const activeTextFrame = stack[stack.length - 1];
       if (activeTextFrame?.mode === "text") {
+        if (activeTextFrame.fence) {
+          if (isFenceClose(line, activeTextFrame.fence)) {
+            activeTextFrame.fence = undefined;
+            continue;
+          }
+
+          appendTextLine(activeTextFrame, line);
+          continue;
+        }
+
         const boundary = isTextBoundary(
           line,
           activeTextFrame,
@@ -119,6 +135,13 @@ export function parseDocument(source: string): MolDocument {
         if (decision === "text") {
           pendingFrame.mode = "text";
           appendTextLine(pendingFrame, line);
+          continue;
+        }
+
+        if (decision === "fenced") {
+          pendingFrame.mode = "text";
+          pendingFrame.fence = getFenceInfo(line);
+          pendingFrame.textBaseIndent = line.indent;
           continue;
         }
 
@@ -469,9 +492,13 @@ function decidePendingMode(
   lines: PreparedLine[],
   index: number,
   rootHeadingLevel: number | undefined,
-): "close" | "text" | "children" | "ignore" {
+): "close" | "text" | "fenced" | "children" | "ignore" {
   if (line.trimmed.length === 0) {
     return "ignore";
+  }
+
+  if (getFenceInfo(line)) {
+    return "fenced";
   }
 
   if (frame.headingDepth !== undefined) {
@@ -568,21 +595,70 @@ function looksLikeBareEntry(
     return false;
   }
 
-  if (/[.!?]$/.test(payload.trim())) {
+  const childIndex = findNextMeaningfulLine(lines, index + 1);
+  if (childIndex === undefined) {
     return false;
   }
 
   const current = lines[index];
-  for (let next = index + 1; next < lines.length; next += 1) {
-    const candidate = lines[next];
-    if (candidate.trimmed.length === 0) {
-      continue;
-    }
-
-    return candidate.indent > current.indent;
+  const child = lines[childIndex];
+  if (child.indent <= current.indent) {
+    return false;
   }
 
-  return false;
+  return isStructuralLine(lines, childIndex);
+}
+
+function isStructuralLine(lines: PreparedLine[], index: number): boolean {
+  const line = lines[index];
+  if (matchHeading(line.text) || getFenceInfo(line)) {
+    return true;
+  }
+
+  const listMatch = line.text.match(/^\s*(?:[-*+]|\d+\.)[ \t]+(.*)$/);
+  if (listMatch) {
+    return parseEntryPayload(listMatch[1].trim(), true, lines, index) !== undefined;
+  }
+
+  return parseEntryPayload(line.trimmed, false, lines, index) !== undefined;
+}
+
+function findNextMeaningfulLine(
+  lines: PreparedLine[],
+  startIndex: number,
+): number | undefined {
+  for (let index = startIndex; index < lines.length; index += 1) {
+    if (lines[index].trimmed.length > 0) {
+      return index;
+    }
+  }
+
+  return undefined;
+}
+
+function getFenceInfo(line: PreparedLine): FenceInfo | undefined {
+  const match = line.trimmed.match(/^([`~]{3,})(.*)$/);
+  if (!match) {
+    return undefined;
+  }
+
+  const marker = match[1];
+  return {
+    markerChar: marker[0] as "`" | "~",
+    markerLength: marker.length,
+  };
+}
+
+function isFenceClose(line: PreparedLine, fence: FenceInfo): boolean {
+  const match = line.trimmed.match(/^([`~]{3,})\s*$/);
+  if (!match) {
+    return false;
+  }
+
+  return (
+    match[1][0] === fence.markerChar &&
+    match[1].length >= fence.markerLength
+  );
 }
 
 const MOL = {
