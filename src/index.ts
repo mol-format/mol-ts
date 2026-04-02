@@ -282,6 +282,11 @@ export function coerceScalar(value: string): unknown {
     return "";
   }
 
+  const quoted = parseQuotedString(trimmed);
+  if (quoted !== undefined) {
+    return quoted;
+  }
+
   if (/^(true|false)$/i.test(trimmed)) {
     return trimmed.toLowerCase() === "true";
   }
@@ -295,6 +300,59 @@ export function coerceScalar(value: string): unknown {
   }
 
   return value;
+}
+
+function parseQuotedString(value: string): string | undefined {
+  if (value.length < 2) {
+    return undefined;
+  }
+
+  const quote = value[0];
+  if ((quote !== `"` && quote !== `'`) || value[value.length - 1] !== quote) {
+    return undefined;
+  }
+
+  let result = "";
+  for (let index = 1; index < value.length - 1; index += 1) {
+    const char = value[index];
+    if (char !== "\\") {
+      result += char;
+      continue;
+    }
+
+    index += 1;
+    if (index >= value.length - 1) {
+      result += "\\";
+      break;
+    }
+
+    const escaped = value[index];
+    switch (escaped) {
+      case "n":
+        result += "\n";
+        break;
+      case "r":
+        result += "\r";
+        break;
+      case "t":
+        result += "\t";
+        break;
+      case "\\":
+        result += "\\";
+        break;
+      case `"`:
+        result += `"`;
+        break;
+      case "'":
+        result += "'";
+        break;
+      default:
+        result += escaped;
+        break;
+    }
+  }
+
+  return result;
 }
 
 function deserializeEntries(
@@ -354,11 +412,28 @@ function prepareLines(source: string): PreparedLine[] {
   const rawLines = normalized.split("\n");
   const lines: PreparedLine[] = [];
   let inBlockComment = false;
+  let activeFence: FenceInfo | undefined;
 
   for (let index = 0; index < rawLines.length; index += 1) {
-    const text = stripComments(rawLines[index], () => inBlockComment, (next) => {
-      inBlockComment = next;
-    });
+    const rawLine = rawLines[index];
+    let text: string;
+
+    if (activeFence) {
+      text = rawLine;
+      if (isFenceCloseFromText(rawLine.trim(), activeFence)) {
+        activeFence = undefined;
+      }
+    } else {
+      const fence = getFenceInfoFromText(rawLine.trim());
+      if (fence && !inBlockComment) {
+        text = rawLine;
+        activeFence = fence;
+      } else {
+        text = stripComments(rawLine, () => inBlockComment, (next) => {
+          inBlockComment = next;
+        });
+      }
+    }
 
     lines.push({
       text,
@@ -443,10 +518,12 @@ function appendTextLine(frame: Frame, line: PreparedLine): void {
   }
 
   const baseIndent = frame.textBaseIndent ?? 0;
-  const text =
+  const text = normalizeTextBodyLine(
     line.trimmed.length === 0
       ? ""
-      : line.text.slice(Math.min(baseIndent, line.text.length));
+      : line.text.slice(Math.min(baseIndent, line.text.length)),
+    frame.fence !== undefined,
+  );
 
   if (frame.entry.value === undefined) {
     frame.entry.value = text;
@@ -497,11 +574,11 @@ function decidePendingMode(
     return "ignore";
   }
 
-  if (getFenceInfo(line)) {
-    return "fenced";
-  }
-
   if (frame.headingDepth !== undefined) {
+    if (getFenceInfo(line)) {
+      return "fenced";
+    }
+
     const headingMatch = matchHeading(line.text);
     if (headingMatch && rootHeadingLevel !== undefined) {
       const normalizedDepth = Math.max(
@@ -521,6 +598,10 @@ function decidePendingMode(
 
   if (line.indent <= frame.indent) {
     return "close";
+  }
+
+  if (getFenceInfo(line)) {
+    return "fenced";
   }
 
   return parseStructuralEntryLine(lines, index) || matchHeading(line.text)
@@ -637,7 +718,11 @@ function findNextMeaningfulLine(
 }
 
 function getFenceInfo(line: PreparedLine): FenceInfo | undefined {
-  const match = line.trimmed.match(/^([`~]{3,})(.*)$/);
+  return getFenceInfoFromText(line.trimmed);
+}
+
+function getFenceInfoFromText(trimmedText: string): FenceInfo | undefined {
+  const match = trimmedText.match(/^([`~]{3,})(.*)$/);
   if (!match) {
     return undefined;
   }
@@ -650,7 +735,14 @@ function getFenceInfo(line: PreparedLine): FenceInfo | undefined {
 }
 
 function isFenceClose(line: PreparedLine, fence: FenceInfo): boolean {
-  const match = line.trimmed.match(/^([`~]{3,})\s*$/);
+  return isFenceCloseFromText(line.trimmed, fence);
+}
+
+function isFenceCloseFromText(
+  trimmedText: string,
+  fence: FenceInfo,
+): boolean {
+  const match = trimmedText.match(/^([`~]{3,})\s*$/);
   if (!match) {
     return false;
   }
@@ -659,6 +751,14 @@ function isFenceClose(line: PreparedLine, fence: FenceInfo): boolean {
     match[1][0] === fence.markerChar &&
     match[1].length >= fence.markerLength
   );
+}
+
+function normalizeTextBodyLine(text: string, literal: boolean): string {
+  if (literal) {
+    return text;
+  }
+
+  return text.replace(/\\([\\#:\-+*`~])/g, "$1");
 }
 
 const MOL = {
