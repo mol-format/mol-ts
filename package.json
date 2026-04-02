@@ -1,0 +1,47 @@
+{
+  "name": "mol-format",
+  "version": "0.0.1",
+  "description": "TypeScript parser for Markdown Object Language (MOL).",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "generate:test-fixtures": "npm run build && node scripts/generate-test-fixtures.js",
+    "test": "npm run build && node scripts/run-fixture-tests.js",
+    "prepublishOnly": "npm run build"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mol-format/mol-ts.git"
+  },
+  "keywords": [
+    "markdown",
+    "parser",
+    "mol",
+    "markdown-object-language",
+    "typescript"
+  ],
+  "author": "Dan Krusi",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/mol-format/mol-ts/issues"
+  },
+  "homepage": "https://github.com/mol-format/mol-ts#readme",
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "typescript": "^6.0.2"
+  }
+}
