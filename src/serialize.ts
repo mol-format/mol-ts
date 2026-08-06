@@ -1,14 +1,31 @@
+import { natural } from "./transforms.js";
+import type { KeyTransform } from "./types.js";
+
 export interface SerializeOptions {
   indent?: string;
   arrayItemKey?: string;
   rootScalarKey?: string;
+  headingLevels?: number;
+  keyTransform?: KeyTransform;
 }
+
+const DEFAULT_HEADING_LEVELS = 4;
+const MAX_HEADING_LEVEL = 6;
 
 interface SerializeContext {
   indent: string;
   arrayItemKey: string;
   rootScalarKey: string;
+  headingLevels: number;
+  keyTransform: KeyTransform;
 }
+
+interface Position {
+  headingDepth: number;
+  indentDepth: number;
+}
+
+const ROOT_POSITION: Position = { headingDepth: 0, indentDepth: 0 };
 
 export function serialize(
   value: unknown,
@@ -18,19 +35,29 @@ export function serialize(
     indent: options.indent ?? "\t",
     arrayItemKey: options.arrayItemKey ?? "Item",
     rootScalarKey: options.rootScalarKey ?? "Value",
+    headingLevels: normalizeHeadingLevels(options.headingLevels),
+    keyTransform: options.keyTransform ?? natural,
   };
 
   const lines = serializeRoot(value, context);
   return lines.join("\n");
 }
 
+function normalizeHeadingLevels(value: number | undefined): number {
+  if (value === undefined || Number.isNaN(value)) {
+    return DEFAULT_HEADING_LEVELS;
+  }
+
+  return Math.max(0, Math.min(MAX_HEADING_LEVEL, Math.floor(value)));
+}
+
 function serializeRoot(value: unknown, context: SerializeContext): string[] {
   if (Array.isArray(value)) {
-    return serializeArrayEntries(value, 0, context);
+    return serializeArrayEntries(value, ROOT_POSITION, context);
   }
 
   if (isPlainObject(value)) {
-    return serializeObjectEntries(value, 0, context);
+    return serializeObjectEntries(value, ROOT_POSITION, context);
   }
 
   return serializeRootScalar(value, context);
@@ -56,13 +83,33 @@ function serializeRootScalar(
 
 function serializeObjectEntries(
   value: Record<string, unknown>,
-  depth: number,
+  position: Position,
   context: SerializeContext,
 ): string[] {
+  const inlineEntries: [string, unknown][] = [];
+  const headingEntries: [string, unknown][] = [];
+
+  // Entries emitted after a sibling heading would be swallowed by that
+  // heading's section, so inline members are always written first.
+  for (const entry of Object.entries(value)) {
+    if (usesHeading(entry[1], position, context)) {
+      headingEntries.push(entry);
+    } else {
+      inlineEntries.push(entry);
+    }
+  }
+
   const lines: string[] = [];
 
-  for (const [key, entryValue] of Object.entries(value)) {
-    lines.push(...serializeNamedValue(key, entryValue, depth, context));
+  for (const [key, entryValue] of inlineEntries) {
+    lines.push(...serializeNamedValue(key, entryValue, position, context));
+  }
+
+  for (const [key, entryValue] of headingEntries) {
+    appendSection(
+      lines,
+      serializeNamedValue(key, entryValue, position, context),
+    );
   }
 
   return lines;
@@ -70,13 +117,31 @@ function serializeObjectEntries(
 
 function serializeArrayEntries(
   value: unknown[],
-  depth: number,
+  position: Position,
   context: SerializeContext,
 ): string[] {
+  // Array order is significant, so elements cannot be reordered the way object
+  // members can. Headings are only used when every element can take one.
+  const asHeadings =
+    value.length > 0 &&
+    value.every((item) => usesHeading(item, position, context));
+
   const lines: string[] = [];
 
   for (const item of value) {
-    lines.push(...serializeNamedValue(context.arrayItemKey, item, depth, context));
+    const block = serializeNamedValue(
+      context.arrayItemKey,
+      item,
+      position,
+      context,
+      { allowHeading: asHeadings, transformKey: false },
+    );
+
+    if (asHeadings) {
+      appendSection(lines, block);
+    } else {
+      lines.push(...block);
+    }
   }
 
   return lines;
@@ -85,10 +150,23 @@ function serializeArrayEntries(
 function serializeNamedValue(
   key: string,
   value: unknown,
-  depth: number,
+  position: Position,
   context: SerializeContext,
+  options: { allowHeading?: boolean; transformKey?: boolean } = {},
 ): string[] {
-  const prefix = `${context.indent.repeat(depth)}${key}`;
+  const allowHeading = options.allowHeading ?? true;
+  const name =
+    options.transformKey === false ? key : context.keyTransform(key);
+
+  if (allowHeading && usesHeading(value, position, context)) {
+    return serializeHeadingValue(name, value, position, context);
+  }
+
+  const prefix = `${context.indent.repeat(position.indentDepth)}${name}`;
+  const childPosition: Position = {
+    headingDepth: position.headingDepth,
+    indentDepth: position.indentDepth + 1,
+  };
 
   if (Array.isArray(value)) {
     if (value.length === 0) {
@@ -97,12 +175,12 @@ function serializeNamedValue(
 
     return [
       `${prefix}:`,
-      ...serializeArrayEntries(value, depth + 1, context),
+      ...serializeArrayEntries(value, childPosition, context),
     ];
   }
 
   if (isPlainObject(value)) {
-    const childLines = serializeObjectEntries(value, depth + 1, context);
+    const childLines = serializeObjectEntries(value, childPosition, context);
     if (childLines.length === 0) {
       return [`${prefix}:`];
     }
@@ -117,12 +195,82 @@ function serializeNamedValue(
 
   return [
     `${prefix}:`,
-    `${context.indent.repeat(depth + 1)}\`\`\`txt`,
+    `${context.indent.repeat(childPosition.indentDepth)}\`\`\`txt`,
     ...scalar.lines.map(
-      (line) => `${context.indent.repeat(depth + 1)}${line}`,
+      (line) => `${context.indent.repeat(childPosition.indentDepth)}${line}`,
     ),
-    `${context.indent.repeat(depth + 1)}\`\`\``,
+    `${context.indent.repeat(childPosition.indentDepth)}\`\`\``,
   ];
+}
+
+function serializeHeadingValue(
+  name: string,
+  value: unknown,
+  position: Position,
+  context: SerializeContext,
+): string[] {
+  const childPosition: Position = {
+    headingDepth: position.headingDepth + 1,
+    indentDepth: 0,
+  };
+
+  const childLines = Array.isArray(value)
+    ? serializeArrayEntries(value, childPosition, context)
+    : serializeObjectEntries(
+        value as Record<string, unknown>,
+        childPosition,
+        context,
+      );
+
+  return [
+    `${"#".repeat(position.headingDepth + 1)} ${name}`,
+    "",
+    ...childLines,
+  ];
+}
+
+function usesHeading(
+  value: unknown,
+  position: Position,
+  context: SerializeContext,
+): boolean {
+  // A heading closes any open indented entry, so once indentation has started
+  // the remaining depth must stay indented.
+  if (position.indentDepth > 0) {
+    return false;
+  }
+
+  if (position.headingDepth >= context.headingLevels) {
+    return false;
+  }
+
+  return isNonEmptyContainer(value);
+}
+
+function isNonEmptyContainer(value: unknown): boolean {
+  if (Array.isArray(value)) {
+    return value.length > 0;
+  }
+
+  return isPlainObject(value) && Object.keys(value).length > 0;
+}
+
+function appendSection(lines: string[], block: string[]): void {
+  // A blank line before a heading reads better, but a text body absorbs any
+  // blank line that follows it, so the separator is dropped after a fence.
+  if (
+    lines.length > 0 &&
+    lines[lines.length - 1] !== "" &&
+    !endsFencedBlock(lines)
+  ) {
+    lines.push("");
+  }
+
+  lines.push(...block);
+}
+
+function endsFencedBlock(lines: string[]): boolean {
+  return /^[`~]{3,}$/u.test(lines[lines.length - 1].trim());
 }
 
 function serializeScalar(

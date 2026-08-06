@@ -1,5 +1,5 @@
 import { coerceScalar } from "./scalars.js";
-import { identity } from "./transforms.js";
+import { camelCase } from "./transforms.js";
 import type { KeyTransform, MolDocument, MolEntry, ParseOptions } from "./types.js";
 
 const DEFAULT_VALUE_KEY = "$value";
@@ -8,7 +8,7 @@ export function deserialize(
   document: MolDocument,
   options: ParseOptions = {},
 ): unknown {
-  const keyTransform = options.keyTransform ?? identity;
+  const keyTransform = options.keyTransform ?? camelCase;
   const valueKey = options.valueKey ?? DEFAULT_VALUE_KEY;
 
   if (

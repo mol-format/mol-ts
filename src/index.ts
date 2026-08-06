@@ -2,7 +2,7 @@ import { deserialize } from "./deserialize.js";
 import { parseDocument } from "./parser.js";
 import { coerceScalar } from "./scalars.js";
 import { serialize } from "./serialize.js";
-import { camelCase, identity } from "./transforms.js";
+import { camelCase, identity, natural } from "./transforms.js";
 
 import type { SerializeOptions } from "./serialize.js";
 import type { KeyTransform, MolDocument, MolEntry, ParseOptions } from "./types.js";
@@ -12,7 +12,7 @@ export type { KeyTransform, MolDocument, MolEntry, ParseOptions } from "./types.
 export { coerceScalar } from "./scalars.js";
 export { parseDocument } from "./parser.js";
 export { serialize } from "./serialize.js";
-export { camelCase, identity } from "./transforms.js";
+export { camelCase, identity, natural } from "./transforms.js";
 export { deserialize } from "./deserialize.js";
 
 export function parse(
@@ -34,6 +34,7 @@ const MOL = {
   serialize,
   coerceScalar,
   camelCase,
+  natural,
   identity,
 };
 
