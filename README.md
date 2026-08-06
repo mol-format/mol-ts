@@ -5,6 +5,7 @@
 Zero dependencies, ESM, fully typed, parser + serializer.
 
 Status: ``DRAFT / IN PROGRESS``
+Specs Version: ``0.1.1``
 
 > This README covers the **TypeScript API only**. For what MOL is, why it exists, the syntax, and the full grammar see:
 > - Org & overview: [https://github.com/mol-format](https://github.com/mol-format)
