@@ -160,6 +160,138 @@ check(
   "entityType: 1",
 );
 
+// --- array titles ---------------------------------------------------------
+
+const TITLES = { arrayTitleKeys: ["label", "id"] };
+
+check(
+  "titles: element headings use the first matching key",
+  MOL.serialize(
+    {
+      addresses: [
+        { id: "addr-1", label: "Rechnungsadresse", city: "Zürich" },
+        { id: "addr-2", label: "Firmenadresse", city: "Zürich" },
+      ],
+    },
+    TITLES,
+  ),
+  "# Addresses\n\n## Rechnungsadresse\n\nId: addr-1\nLabel: Rechnungsadresse\nCity: Zürich" +
+    "\n\n## Firmenadresse\n\nId: addr-2\nLabel: Firmenadresse\nCity: Zürich",
+);
+
+check(
+  "titles: falls back to the next key in priority order",
+  MOL.serialize({ rows: [{ label: "A", v: 1 }, { id: "B", v: 2 }] }, TITLES),
+  "# Rows\n\n## A\n\nLabel: A\nV: 1\n\n## B\n\nId: B\nV: 2",
+);
+
+check(
+  "titles: key lookup is case insensitive",
+  MOL.serialize({ rows: [{ LABEL: "A", v: 1 }, { Id: "B", v: 2 }] }, TITLES),
+  "# Rows\n\n## A\n\nLABEL: A\nV: 1\n\n## B\n\nId: B\nV: 2",
+);
+
+check(
+  "titles: unusable values fall through to the next key",
+  MOL.serialize(
+    { rows: [{ label: "", id: "B", v: 1 }, { label: null, id: "C", v: 2 }] },
+    TITLES,
+  ),
+  '# Rows\n\n## B\n\nLabel: ""\nId: B\nV: 1\n\n## C\n\nLabel: null\nId: C\nV: 2',
+);
+
+check(
+  "titles: all-or-nothing when one element has no title",
+  MOL.serialize({ rows: [{ label: "A", v: 1 }, { v: 2 }] }, TITLES),
+  "# Rows\n\n## Item\n\nLabel: A\nV: 1\n\n## Item\n\nV: 2",
+);
+
+check(
+  "titles: duplicate titles disqualify the whole array",
+  MOL.serialize(
+    { rows: [{ label: "Home", v: 1 }, { label: "Home", v: 2 }, { label: "Work", v: 3 }] },
+    TITLES,
+  ),
+  "# Rows\n\n## Item\n\nLabel: Home\nV: 1\n\n## Item\n\nLabel: Home\nV: 2" +
+    "\n\n## Item\n\nLabel: Work\nV: 3",
+);
+
+check(
+  "titles: duplicate detection ignores case",
+  MOL.serialize({ rows: [{ label: "Home", v: 1 }, { label: "home", v: 2 }] }, TITLES),
+  "# Rows\n\n## Item\n\nLabel: Home\nV: 1\n\n## Item\n\nLabel: home\nV: 2",
+);
+
+check(
+  "titles: a duplicate is not retried against the next candidate key",
+  MOL.serialize(
+    { rows: [{ label: "Home", id: "a", v: 1 }, { label: "Home", id: "b", v: 2 }] },
+    TITLES,
+  ),
+  "# Rows\n\n## Item\n\nLabel: Home\nId: a\nV: 1\n\n## Item\n\nLabel: Home\nId: b\nV: 2",
+);
+
+check(
+  "titles: finite numbers are usable titles",
+  MOL.serialize({ rows: [{ id: 1, v: "x" }, { id: 2, v: "y" }] }, TITLES),
+  "# Rows\n\n## 1\n\nId: 1\nV: x\n\n## 2\n\nId: 2\nV: y",
+);
+
+check(
+  "titles: applied to the indented form too",
+  MOL.serialize({ rows: [{ label: "A", v: 1 }, { label: "B", v: 2 }] }, {
+    ...TITLES,
+    headingLevels: 0,
+  }),
+  "Rows:\n\tA:\n\t\tLabel: A\n\t\tV: 1\n\tB:\n\t\tLabel: B\n\t\tV: 2",
+);
+
+check(
+  "titles: a colon disqualifies a title in the indented form",
+  MOL.serialize({ rows: [{ label: "A: x", v: 1 }, { label: "B", v: 2 }] }, {
+    ...TITLES,
+    headingLevels: 0,
+  }),
+  "Rows:\n\tItem:\n\t\tLabel: A: x\n\t\tV: 1\n\tItem:\n\t\tLabel: B\n\t\tV: 2",
+);
+
+check(
+  "titles: line breaks collapse in the heading but not the value",
+  MOL.serialize({ rows: [{ label: "A\nB", v: 1 }, { label: "C", v: 2 }] }, TITLES),
+  "# Rows\n\n## A B\n\nLabel:\n\t```txt\n\tA\n\tB\n\t```\nV: 1\n\n## C\n\nLabel: C\nV: 2",
+);
+
+check(
+  "titles: scalar elements are left alone",
+  MOL.serialize({ rows: ["x", "y"] }, TITLES),
+  "# Rows\n\nItem: x\nItem: y",
+);
+
+check(
+  "titles: no effect without arrayTitleKeys",
+  MOL.serialize({ rows: [{ label: "A" }, { label: "B" }] }),
+  "# Rows\n\n## Item\n\nLabel: A\n\n## Item\n\nLabel: B",
+);
+
+// Distinct titles are by definition not repeated keys, so a titled nested
+// array reads back as a keyed object rather than an array.
+check(
+  "titles: nested titled array deserializes as a keyed object",
+  MOL.parse(
+    MOL.serialize({ rows: [{ label: "A", v: 1 }, { label: "B", v: 2 }] }, TITLES),
+    { preserveRootHeadings: true },
+  ),
+  { rows: { a: { label: "A", v: 1 }, b: { label: "B", v: 2 } } },
+);
+
+// Root headings are structural regardless of their names, so a titled root
+// array still round trips as an array.
+check(
+  "titles: root titled array still deserializes as an array",
+  MOL.parse(MOL.serialize([{ label: "A", v: 1 }, { label: "B", v: 2 }], TITLES)),
+  [{ label: "A", v: 1 }, { label: "B", v: 2 }],
+);
+
 // --- round trips ----------------------------------------------------------
 
 // Written with JS-idiomatic keys: `natural` on the way out, `camelCase` back.

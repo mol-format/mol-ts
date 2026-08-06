@@ -4,6 +4,7 @@ import type { KeyTransform } from "./types.js";
 export interface SerializeOptions {
   indent?: string;
   arrayItemKey?: string;
+  arrayTitleKeys?: string[];
   rootScalarKey?: string;
   headingLevels?: number;
   keyTransform?: KeyTransform;
@@ -15,6 +16,7 @@ const MAX_HEADING_LEVEL = 6;
 interface SerializeContext {
   indent: string;
   arrayItemKey: string;
+  arrayTitleKeys: string[];
   rootScalarKey: string;
   headingLevels: number;
   keyTransform: KeyTransform;
@@ -34,6 +36,7 @@ export function serialize(
   const context: SerializeContext = {
     indent: options.indent ?? "\t",
     arrayItemKey: options.arrayItemKey ?? "Item",
+    arrayTitleKeys: options.arrayTitleKeys ?? [],
     rootScalarKey: options.rootScalarKey ?? "Value",
     headingLevels: normalizeHeadingLevels(options.headingLevels),
     keyTransform: options.keyTransform ?? natural,
@@ -126,12 +129,13 @@ function serializeArrayEntries(
     value.length > 0 &&
     value.every((item) => usesHeading(item, position, context));
 
+  const titles = resolveArrayTitles(value, context, asHeadings);
   const lines: string[] = [];
 
-  for (const item of value) {
+  for (let index = 0; index < value.length; index += 1) {
     const block = serializeNamedValue(
-      context.arrayItemKey,
-      item,
+      titles?.[index] ?? context.arrayItemKey,
+      value[index],
       position,
       context,
       { allowHeading: asHeadings, transformKey: false },
@@ -145,6 +149,107 @@ function serializeArrayEntries(
   }
 
   return lines;
+}
+
+// Names each element after a value taken from the element itself, so arrays of
+// records read as titled sections instead of a run of identical keys. Applied
+// all-or-nothing: a partly titled array would split into unrelated keys.
+function resolveArrayTitles(
+  items: unknown[],
+  context: SerializeContext,
+  asHeadings: boolean,
+): string[] | undefined {
+  if (context.arrayTitleKeys.length === 0 || items.length === 0) {
+    return undefined;
+  }
+
+  const titles: string[] = [];
+  const seen = new Set<string>();
+
+  for (const item of items) {
+    const title = resolveTitle(item, context.arrayTitleKeys, asHeadings);
+    if (title === undefined) {
+      return undefined;
+    }
+
+    // Repeated titles are repeated keys, which would turn just those elements
+    // back into an array and leave the rest as plain members. Titling the
+    // array at all is only coherent when every title is distinct.
+    const identity = title.toLowerCase();
+    if (seen.has(identity)) {
+      return undefined;
+    }
+
+    seen.add(identity);
+    titles.push(title);
+  }
+
+  return titles;
+}
+
+function resolveTitle(
+  item: unknown,
+  titleKeys: string[],
+  asHeadings: boolean,
+): string | undefined {
+  if (!isPlainObject(item)) {
+    return undefined;
+  }
+
+  for (const candidate of titleKeys) {
+    const key = findKeyIgnoringCase(item, candidate);
+    if (key === undefined) {
+      continue;
+    }
+
+    const title = normalizeTitle(item[key]);
+    if (title === undefined) {
+      continue;
+    }
+
+    // Outside heading form the title becomes a `Key: Value` key, and the
+    // reader splits on the first colon, so a colon would corrupt the entry.
+    if (!asHeadings && title.includes(":")) {
+      continue;
+    }
+
+    return title;
+  }
+
+  return undefined;
+}
+
+function findKeyIgnoringCase(
+  item: Record<string, unknown>,
+  candidate: string,
+): string | undefined {
+  const target = candidate.toLowerCase();
+
+  for (const key of Object.keys(item)) {
+    if (key.toLowerCase() === target) {
+      return key;
+    }
+  }
+
+  return undefined;
+}
+
+function normalizeTitle(value: unknown): string | undefined {
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      return undefined;
+    }
+
+    return String(value);
+  }
+
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  // A heading or key occupies a single line, so any internal break collapses.
+  const text = value.replace(/\s+/gu, " ").trim();
+  return text.length > 0 ? text : undefined;
 }
 
 function serializeNamedValue(

@@ -199,6 +199,7 @@ Used by `serialize()`.
 | `indent` | `string` | `"\t"` | Indentation unit per nesting level, used below the `headingLevels` cutoff. Use `"  "` for two spaces. |
 | `keyTransform` | `(key: string) => string` | `natural` | Applied to every object key before it is written. Does **not** apply to `arrayItemKey` or `rootScalarKey`, which are emitted verbatim. |
 | `arrayItemKey` | `string` | `"Item"` | Key emitted for each element of an array. MOL expresses arrays as repeated keys, so array elements need a name. |
+| `arrayTitleKeys` | `string[]` | `[]` (off) | Property names to title array elements with, in priority order, instead of `arrayItemKey`. Matched case-insensitively against each element. Opt-in, because titling changes what the array deserializes to. See below. |
 | `rootScalarKey` | `string` | `"Value"` | Heading emitted when the serialized root value is a bare scalar rather than an object or array. |
 
 ### `headingLevels`
@@ -257,6 +258,79 @@ Two consequences of heading mode are worth knowing:
 
 - **Object members are reordered.** Scalar members are written before members that become headings, because anything emitted after a heading would be parsed as part of that heading's section. Object key order is not semantically meaningful in MOL, but it does mean output order may differ from your object's insertion order.
 - **Array elements are never reordered.** Since order matters for arrays, headings are used for an array only when *every* element is a non-empty object or array. A mixed array such as `[1, { a: 2 }, 3]` falls back to indentation for all of its elements.
+
+### `arrayTitleKeys`
+
+An array of records serializes to a run of identical `Item` headings, which carries no information:
+
+```ts
+const value = {
+  addresses: [
+    { id: "addr-1", label: "Rechnungsadresse" },
+    { id: "addr-2", label: "Firmenadresse" },
+  ],
+};
+
+MOL.serialize(value);
+```
+
+```md
+# Addresses
+
+## Item
+
+Id: addr-1
+Label: Rechnungsadresse
+
+## Item
+
+Id: addr-2
+Label: Firmenadresse
+```
+
+`arrayTitleKeys` names each element after a value taken from the element itself. The list is a priority order, and lookup is case-insensitive, so `["label", "id"]` means *use `label` if it has one, otherwise `id`*:
+
+```ts
+MOL.serialize(value, { arrayTitleKeys: ["label", "id"] });
+```
+
+```md
+# Addresses
+
+## Rechnungsadresse
+
+Id: addr-1
+Label: Rechnungsadresse
+
+## Firmenadresse
+
+Id: addr-2
+Label: Firmenadresse
+```
+
+The title is taken from data, so it is written verbatim — `keyTransform` is not applied to it. That matters when falling back to something like `id`, which should not be re-worded into `Customer Alpine Zk Ojs35hzw`.
+
+Resolution rules:
+
+- A candidate is used only if its value is a string or a finite number, and non-empty after trimming. Anything else — `null`, `""`, an object, a missing property — falls through to the next candidate.
+- Whitespace in a title collapses to single spaces, since a heading is one line. The element's own value is untouched, so a multi-line `label` still serializes in full inside the section.
+- **All or nothing.** If any element fails to produce a title, every element falls back to `arrayItemKey`. A partly titled array would split into unrelated keys, which is worse than an untitled one.
+- **Titles must be distinct**, compared case-insensitively, or the whole array falls back to `arrayItemKey`. Two elements sharing a title would be repeated keys, so those two would read back as an array while the rest stayed plain members. Note that a collision on one candidate is not retried against the next: `[{ label: "Home", id: "a" }, { label: "Home", id: "b" }]` falls back to `Item` rather than titling by `id`.
+- In the indented form, a title containing `:` is skipped, because the key would be cut at the first colon when read back. Headings have no such problem.
+
+**This changes what the array deserializes to.** MOL arrays come from *repeated* keys, and distinct titles are by definition not repeated, so a titled nested array reads back as a keyed object:
+
+```ts
+const value = { rows: [{ label: "A", v: 1 }, { label: "B", v: 2 }] };
+
+MOL.parse(MOL.serialize(value), { preserveRootHeadings: true });
+// { rows: { item: [ { label: "A", v: 1 }, { label: "B", v: 2 } ] } }   <- array
+
+MOL.parse(MOL.serialize(value, { arrayTitleKeys: ["label"] }), { preserveRootHeadings: true });
+// { rows: { a: { label: "A", v: 1 }, b: { label: "B", v: 2 } } }       <- keyed object
+```
+
+This is the same shape the [MOL overview](https://github.com/mol-format) uses for its `## Addresses` / `### Business` / `### Home` example, so it is idiomatic — but reach for it when the document is meant to be read, not when you need the array back. A **root-level** array is the exception: root headings are structural whatever they are named, so a titled root array still parses back as an array.
 
 ### Other flags
 
