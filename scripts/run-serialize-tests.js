@@ -1,6 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
+import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 
-import MOL from "../dist/index.js";
+import MOL from "mol-format";
 
 const failures = [];
 let passed = 0;
@@ -334,6 +336,55 @@ check(
   MOL.parse(MOL.serialize([{ id: 10 }, { id: 11 }])),
   [{ id: 10 }, { id: 11 }],
 );
+
+// --- long string sections and literal text --------------------------------
+
+const PROSE = "Commission a clear overview of the most important developments, grounded in the available reporting.";
+const PROSE_OPTIONS = { stringHeadingLength: 80 };
+
+check("package: CommonJS resolvers can find the ESM entry point",
+  createRequire(import.meta.url).resolve("mol-format"),
+  fileURLToPath(new URL("../dist/index.js", import.meta.url)));
+check("prose: heading sections are opt-in", MOL.serialize({ prompt: PROSE }), `Prompt: ${PROSE}`);
+check("prose: long strings become heading bodies", MOL.serialize({ prompt: PROSE }, PROSE_OPTIONS), `# Prompt\n\n${PROSE}`);
+check("prose: threshold includes its exact boundary", MOL.serialize({ text: "abcd" }, { stringHeadingLength: 4 }), "# Text\n\nabcd");
+check("prose: short strings stay inline", MOL.serialize({ text: "abc" }, { stringHeadingLength: 4 }), "Text: abc");
+check("prose: URLs stay inline", MOL.serialize({ url: "https://example.org/a-long-resource" }, { stringHeadingLength: 1 }), "Url: https://example.org/a-long-resource");
+check("prose: heading cutoff still applies", MOL.serialize({ prompt: PROSE }, { ...PROSE_OPTIONS, headingLevels: 0 }), `Prompt: ${PROSE}`);
+checkRoundTrip("prose: paragraphs and sibling sections add no padding", {
+  editor: `${PROSE}\n\nExplain the choices and leave uncertainty visible.`,
+  writer: "Write a connected explanation that gives readers enough context to understand the development and its limits.",
+  settings: { language: "en" },
+}, PROSE_OPTIONS);
+checkRoundTrip("prose: nested sections and indentation cutoff", { newsroom: { prompts: { editor: PROSE, writer: "first line\nsecond line" } } }, { ...PROSE_OPTIONS, headingLevels: 2 });
+checkRoundTrip("prose: nested text followed by an ancestor's sibling section", {
+  first: { prompt: PROSE }, second: { prompt: `${PROSE}\n\nAnother paragraph.` },
+}, PROSE_OPTIONS);
+check("prose: root records ending in text retain exact values",
+  MOL.parse(MOL.serialize([{ id: 1, prompt: PROSE }, { id: 2, prompt: PROSE }], PROSE_OPTIONS)),
+  [{ id: 1, prompt: PROSE }, { id: 2, prompt: PROSE }]);
+checkRoundTrip("prose: empty strings stay strings at zero threshold", { empty: "", text: "ordinary prose" }, { stringHeadingLength: 0 });
+check("prose: root string arrays retain order and exact text",
+  MOL.parse(MOL.serialize([PROSE, "first line\nsecond line"], PROSE_OPTIONS)),
+  [PROSE, "first line\nsecond line"]);
+
+const LITERALS = [
+  "A note: text containing a colon must retain its complete meaning and every qualifier.",
+  "- Preserve every citation and paragraph boundary in this list-like instruction.",
+  "+ A list-like instruction.", "* Another list-like instruction.", "1. Numbered instruction.",
+  "true", "false", "null", "0042", "1".repeat(90), '"quoted"',
+  "  deliberate spaces  ", "line one\nline two\n\n", "Retain literal /* notes */ in the text.",
+  String.raw`Keep \# heading escapes and \* emphasis escapes exactly as written.`,
+  '# Review\n\n```json\n{"checked": true}\n```\n\n~~~~\ncode\n~~~~\n\n````\ninner fence\n````\n',
+];
+for (const [index, literal] of LITERALS.entries()) {
+  checkRoundTrip(`literal sections: ${index}`, { prompt: literal, next: PROSE }, { stringHeadingLength: 0 });
+}
+const embeddedCode = 'Before\n```json\n{"checked": true}\n```\n````\nlonger fence\n````\nAfter';
+check("literal fences: root strings round trip", MOL.parse(MOL.serialize(embeddedCode)), embeddedCode);
+checkRoundTrip("literal fences: indented values round trip", { doc: { prompt: embeddedCode, next: "done" } }, { headingLevels: 0, indent: "  " });
+check("literal fences: outer fence exceeds embedded runs", MOL.serialize(embeddedCode).startsWith("# Value\n\n`````txt\n"), true);
+checkRoundTrip("literal comments: single-line values stay intact", { prompt: "Preserve /* this comment */ as text", next: 1 });
 
 // --- reporting ------------------------------------------------------------
 

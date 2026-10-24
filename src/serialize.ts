@@ -1,4 +1,5 @@
 import { natural } from "./transforms.js";
+import { coerceScalar } from "./scalars.js";
 import type { KeyTransform } from "./types.js";
 
 export interface SerializeOptions {
@@ -7,6 +8,8 @@ export interface SerializeOptions {
   arrayTitleKeys?: string[];
   rootScalarKey?: string;
   headingLevels?: number;
+  /** Opt in to heading sections for long or multiline strings. */
+  stringHeadingLength?: number;
   keyTransform?: KeyTransform;
 }
 
@@ -19,7 +22,10 @@ interface SerializeContext {
   arrayTitleKeys: string[];
   rootScalarKey: string;
   headingLevels: number;
+  stringHeadingLength?: number;
   keyTransform: KeyTransform;
+  /** Whether the last emitted section ends in unfenced text. */
+  endsInTextBody: boolean;
 }
 
 interface Position {
@@ -39,7 +45,9 @@ export function serialize(
     arrayTitleKeys: options.arrayTitleKeys ?? [],
     rootScalarKey: options.rootScalarKey ?? "Value",
     headingLevels: normalizeHeadingLevels(options.headingLevels),
+    stringHeadingLength: options.stringHeadingLength,
     keyTransform: options.keyTransform ?? natural,
+    endsInTextBody: false,
   };
 
   const lines = serializeRoot(value, context);
@@ -75,12 +83,13 @@ function serializeRootScalar(
     return [`# ${context.rootScalarKey}`, "", scalar.value];
   }
 
+  const fence = textFence(scalar.lines);
   return [
     `# ${context.rootScalarKey}`,
     "",
-    "```txt",
+    `${fence}txt`,
     ...scalar.lines,
-    "```",
+    fence,
   ];
 }
 
@@ -109,9 +118,11 @@ function serializeObjectEntries(
   }
 
   for (const [key, entryValue] of headingEntries) {
+    const separate = !context.endsInTextBody;
     appendSection(
       lines,
       serializeNamedValue(key, entryValue, position, context),
+      separate,
     );
   }
 
@@ -133,6 +144,7 @@ function serializeArrayEntries(
   const lines: string[] = [];
 
   for (let index = 0; index < value.length; index += 1) {
+    const separate = !context.endsInTextBody;
     const block = serializeNamedValue(
       titles?.[index] ?? context.arrayItemKey,
       value[index],
@@ -142,7 +154,7 @@ function serializeArrayEntries(
     );
 
     if (asHeadings) {
-      appendSection(lines, block);
+      appendSection(lines, block, separate);
     } else {
       lines.push(...block);
     }
@@ -267,6 +279,7 @@ function serializeNamedValue(
     return serializeHeadingValue(name, value, position, context);
   }
 
+  context.endsInTextBody = false;
   const prefix = `${context.indent.repeat(position.indentDepth)}${name}`;
   const childPosition: Position = {
     headingDepth: position.headingDepth,
@@ -298,13 +311,14 @@ function serializeNamedValue(
     return [`${prefix}: ${scalar.value}`];
   }
 
+  const fence = textFence(scalar.lines);
   return [
     `${prefix}:`,
-    `${context.indent.repeat(childPosition.indentDepth)}\`\`\`txt`,
+    `${context.indent.repeat(childPosition.indentDepth)}${fence}txt`,
     ...scalar.lines.map(
       (line) => `${context.indent.repeat(childPosition.indentDepth)}${line}`,
     ),
-    `${context.indent.repeat(childPosition.indentDepth)}\`\`\``,
+    `${context.indent.repeat(childPosition.indentDepth)}${fence}`,
   ];
 }
 
@@ -314,6 +328,21 @@ function serializeHeadingValue(
   position: Position,
   context: SerializeContext,
 ): string[] {
+  if (typeof value === "string") {
+    const heading = `${"#".repeat(position.headingDepth + 1)} ${name}`;
+    const firstLine = value.split("\n", 1)[0];
+    const text = coerceScalar(value) === value ? value : JSON.stringify(value);
+    const literal =
+      text !== value || value !== value.trim() || value.includes("/*") || value.includes("\r") ||
+      firstLine.includes(":") || /^\s*(?:[-*+]|\d+\.)\s/u.test(firstLine) ||
+      /(^|\n)\s*(?:#{1,6}\s|`{3,}|~{3,})/u.test(value) || /\\[\\#:\-+*`~]/u.test(value);
+    context.endsInTextBody = !literal;
+    if (!literal) return [heading, "", value];
+    const lines = text.split("\n");
+    const fence = textFence(lines);
+    return [heading, "", `${fence}txt`, ...lines, fence];
+  }
+
   const childPosition: Position = {
     headingDepth: position.headingDepth + 1,
     indentDepth: 0,
@@ -349,7 +378,12 @@ function usesHeading(
     return false;
   }
 
-  return isNonEmptyContainer(value);
+  const longText =
+    typeof value === "string" && value.length > 0 &&
+    context.stringHeadingLength !== undefined &&
+    (value.length >= context.stringHeadingLength || value.includes("\n")) &&
+    !/^https?:\/\/\S+$/u.test(value);
+  return isNonEmptyContainer(value) || longText;
 }
 
 function isNonEmptyContainer(value: unknown): boolean {
@@ -360,11 +394,11 @@ function isNonEmptyContainer(value: unknown): boolean {
   return isPlainObject(value) && Object.keys(value).length > 0;
 }
 
-function appendSection(lines: string[], block: string[]): void {
-  // A blank line before a heading reads better, but a text body absorbs any
-  // blank line that follows it, so the separator is dropped after a fence.
+function appendSection(lines: string[], block: string[], separate = true): void {
+  // A separator after unfenced text becomes part of that value, including
+  // when the text ends a nested container. Fences need no separator either.
   if (
-    lines.length > 0 &&
+    separate && lines.length > 0 &&
     lines[lines.length - 1] !== "" &&
     !endsFencedBlock(lines)
   ) {
@@ -378,11 +412,21 @@ function endsFencedBlock(lines: string[]): boolean {
   return /^[`~]{3,}$/u.test(lines[lines.length - 1].trim());
 }
 
+function textFence(lines: string[]): string {
+  let length = 3;
+  for (const line of lines) {
+    for (const run of line.matchAll(/`+/gu)) {
+      length = Math.max(length, run[0].length + 1);
+    }
+  }
+  return "`".repeat(length);
+}
+
 function serializeScalar(
   value: unknown,
 ): { kind: "inline"; value: string } | { kind: "block"; lines: string[] } {
   if (typeof value === "string") {
-    if (value.includes("\n")) {
+    if (value.includes("\n") || value.includes("/*")) {
       return {
         kind: "block",
         lines: value.split("\n"),

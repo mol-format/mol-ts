@@ -196,6 +196,7 @@ Used by `serialize()`.
 | Flag | Type | Default | Description |
 | --- | --- | --- | --- |
 | `headingLevels` | `number` | `4` | How many levels of nesting are written as markdown headings (`#`, `##`, …) before falling back to indentation. `0` disables headings entirely. Clamped to `0`–`6`, since markdown has no `#######`. |
+| `stringHeadingLength` | `number` | off | Opt in to heading sections for nonempty strings at least this long, and for multiline strings. Respects `headingLevels`; single-line HTTP(S) URLs stay inline. |
 | `indent` | `string` | `"\t"` | Indentation unit per nesting level, used below the `headingLevels` cutoff. Use `"  "` for two spaces. |
 | `keyTransform` | `(key: string) => string` | `natural` | Applied to every object key before it is written. Does **not** apply to `arrayItemKey` or `rootScalarKey`, which are emitted verbatim. |
 | `arrayItemKey` | `string` | `"Item"` | Key emitted for each element of an array. MOL expresses arrays as repeated keys, so array elements need a name. |
@@ -257,7 +258,30 @@ Any value in between switches over at that depth — `headingLevels: 2` writes `
 Two consequences of heading mode are worth knowing:
 
 - **Object members are reordered.** Scalar members are written before members that become headings, because anything emitted after a heading would be parsed as part of that heading's section. Object key order is not semantically meaningful in MOL, but it does mean output order may differ from your object's insertion order.
-- **Array elements are never reordered.** Since order matters for arrays, headings are used for an array only when *every* element is a non-empty object or array. A mixed array such as `[1, { a: 2 }, 3]` falls back to indentation for all of its elements.
+- **Array elements are never reordered.** Since order matters for arrays, headings are used for an array only when *every* element can take a heading: non-empty objects or arrays, and eligible strings when `stringHeadingLength` is enabled. A mixed array such as `[1, { a: 2 }, 3]` falls back to indentation for all of its elements.
+
+### `stringHeadingLength`
+
+Long prose can be written directly under its field heading instead of inside an indented value:
+
+```ts
+MOL.serialize({
+  language: "en",
+  brief: "Commission a clear overview of the most important developments, grounded in the available reporting.",
+}, { stringHeadingLength: 80 });
+```
+
+```md
+Language: en
+
+# Brief
+
+Commission a clear overview of the most important developments, grounded in the available reporting.
+```
+
+This is opt-in; existing serialization is unchanged when the option is omitted. Multiline strings also become sections when the option is enabled, even below the length threshold. Empty strings and single-line HTTP(S) URLs stay inline. `headingLevels: 0` disables these sections as well as container headings.
+
+Text that could be interpreted as MOL structure or a different scalar type is fenced or quoted to preserve its meaning. Literal comments, list-like openings, Markdown headings and embedded code fences remain text. The outer fence is longer than any embedded backtick run. Section separators are omitted after prose bodies because an extra blank line there would become part of the preceding string; paragraph breaks inside the value are preserved.
 
 ### `arrayTitleKeys`
 
@@ -466,7 +490,7 @@ MOL.parse(text, { preserveRootHeadings: true });
 // { password: { hash: "x" }, addresses: { home: { city: "Z" } } }   <- correct
 ```
 
-This only bites when every root member is a container. If the root has at least one scalar member — the common case — the document has a mix of entries and headings at root, no unwrapping happens, and a plain `parse()` is correct. Use `headingLevels: 0` if you would rather not think about it.
+This applies when every root member becomes a heading, including strings selected by `stringHeadingLength`. If the root has at least one inline scalar member — the common case — the document has a mix of entries and headings at root, no unwrapping happens, and a plain `parse()` is correct. Use `preserveRootHeadings: true` for an object of sections, or `headingLevels: 0` for fully indented output.
 
 Beyond that, `parse(serialize(x))` recovers scalars, objects, and nested structures, but is **not** byte-for-byte lossless:
 
